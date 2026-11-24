@@ -13,6 +13,12 @@ An AI-powered assistant that lets users upload a PDF, extract its text, and ask 
 
 ## How to run
 
+## Install dependencies
+
+```powershell
+pip install -r requirements.txt
+```
+
 1. Create and activate a Python virtual environment.
 2. Install the required packages.
 3. Add your Gemini API key to a `.env` file.
