@@ -1,0 +1,23 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+
+# Secret API keys and local configuration
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Local vector database
+chroma_db/
+
+# Local test documents
+private_documents/
+
+# Operating system files
+.DS_Store
+Thumbs.db
