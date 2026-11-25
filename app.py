@@ -1,151 +1,223 @@
+import os
+import tempfile
+
+
 import streamlit as st
 from pypdf import PdfReader
+
+
 from text_splitter import split_pages_into_chunks
-from gemini_helper import get_answer
+from rag_helper import create_vector_store, retrieve_relevant_chunks
+from gemini_helper import answer_from_context_with_history
+
 
 
 st.set_page_config(
     page_title="AI Document Assistant",
-    page_icon=None,
-    layout="centered",
+    page_icon="📄",
+    layout="wide",
 )
 
 
-st.title("AI Document Assistant")
-st.write("Upload a PDF to extract and preview its text.")
 
-
-uploaded_file = st.file_uploader(
-    "Choose a PDF file",
-    type=["pdf"],
+st.title("📄 AI Document Assistant")
+st.caption(
+    "Upload a PDF and ask questions. "
+    "Answers are generated using relevant content retrieved from the document."
 )
 
 
-if uploaded_file is not None:
-    try:
-        reader = PdfReader(uploaded_file)
+
+if "collection" not in st.session_state:
+    st.session_state.collection = None
 
 
-        if reader.is_encrypted:
-            st.warning(
-                "This PDF is password-protected. "
-                "Please use an unprotected PDF for now."
-            )
-        else:
-            pages = []
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 
-            for page_number, page in enumerate(reader.pages, start=1):
-                text = page.extract_text() or ""
+if "document_name" not in st.session_state:
+    st.session_state.document_name = None
 
 
-                pages.append({
-                    "page_number": page_number,
-                    "text": text,
-                })
+
+with st.sidebar:
+    st.header("Upload document")
 
 
-            full_text = "\n\n".join(
-                page["text"] for page in pages
-            )
+    uploaded_file = st.file_uploader(
+        "Choose a PDF file",
+        type=["pdf"],
+    )
 
 
-            if full_text.strip():
-                st.success("PDF text extracted successfully!")
+    if uploaded_file is not None:
+        st.success(f"Uploaded: {uploaded_file.name}")
 
 
-                st.write(f"File: {uploaded_file.name}")
-                st.write(f"Pages: {len(pages)}")
-                st.write(f"Characters extracted: {len(full_text):,}")
+        if st.button("Process PDF", type="primary"):
+            with st.spinner("Extracting, chunking, embedding, and indexing PDF..."):
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=".pdf",
+                    ) as temp_file:
+                        temp_file.write(uploaded_file.getvalue())
+                        temp_pdf_path = temp_file.name
 
 
-                with st.expander(
-                    "View extracted text",
-                    expanded=True,
-                ):
-                    st.text_area(
-                        "Text preview",
-                        value=full_text[:15000],
-                        height=350,
-                    )
+                    reader = PdfReader(temp_pdf_path)
 
 
-                st.caption(
-                    "The preview shows up to 15,000 characters."
-                )
+                    pages = []
 
 
-                chunks = split_pages_into_chunks(pages)
-
-
-                st.subheader("Text chunks")
-                st.write(f"Total chunks created: {len(chunks)}")
-
-
-                for index, chunk in enumerate(chunks[:5], start=1):
-                    with st.expander(
-                        f"Chunk {index} — Page {chunk['page_number']}"
+                    for page_number, page in enumerate(
+                        reader.pages,
+                        start=1,
                     ):
-                        st.write(chunk["text"])
-                        st.caption(
-                            f"Characters: {len(chunk['text'])}"
+                        text = page.extract_text() or ""
+
+
+                        pages.append({
+                            "page_number": page_number,
+                            "text": text,
+                        })
+
+
+                    chunks = split_pages_into_chunks(pages)
+
+
+                    if not chunks:
+                        st.error(
+                            "No readable text was found in this PDF. "
+                            "It may be a scanned document."
+                        )
+                    else:
+                        collection = create_vector_store(chunks)
+
+
+                        st.session_state.collection = collection
+                        st.session_state.document_name = uploaded_file.name
+                        st.session_state.chat_history = []
+
+
+                        st.success(
+                            f"Processed {len(chunks)} chunks from "
+                            f"{len(pages)} pages."
                         )
 
 
-                st.caption(
-                    "Showing up to the first 5 chunks."
-                )
+                    os.unlink(temp_pdf_path)
 
 
-                st.subheader("Ask about this document")
+                except Exception as error:
+                    st.error(f"Could not process the PDF: {error}")
 
 
-                question = st.text_input(
-                    "Enter your question",
-                    placeholder="For example: What is this document about?",
-                )
-
-                use_general_knowledge = st.checkbox(
-                    "Allow general knowledge answers",
-                    value=False,
-                )
-
-                if st.button("Get answer"):
-                    if not question.strip():
-                        st.warning("Please enter a question.")
-                    else:
-                        with st.spinner("Getting answer..."):
-                            try:
-                                answer = get_answer(
-                                    question=question,
-                                    document_text=full_text,
-                                    use_general_knowledge=use_general_knowledge,
-                                )
+    if st.session_state.document_name:
+        st.divider()
+        st.subheader("Current document")
+        st.write(st.session_state.document_name)
 
 
-                                st.subheader("Answer")
-                                st.write(answer)
+    st.divider()
+    st.caption(
+        "This assistant answers using the uploaded PDF. "
+        "If the answer is not in the document, it will say so."
+    )
 
 
-                            except Exception as error:
-                                st.error(
-                                    "Could not get an answer from Gemini. "
-                                    "Please try again."
-                                )
-                                st.caption(str(error))
+
+st.header("Ask your document")
 
 
-            else:
-                st.warning(
-                    "No readable text was found. "
-                    "Try a PDF where you can select and copy the text."
-                )
-
-
-    except Exception:
-        st.error(
-            "We could not read this PDF. "
-            "Please try another valid, unprotected PDF."
-        )
+if st.session_state.collection is None:
+    st.info(
+        "Upload and process a PDF first. "
+        "Then ask questions about its contents."
+    )
 else:
-    st.info("Upload a PDF to get started.")
+    question = st.chat_input(
+        "Ask a question about the uploaded PDF..."
+    )
+
+
+    if question:
+        st.session_state.chat_history.append({
+            "role": "user",
+            "content": question,
+        })
+
+
+        with st.spinner("Searching the document and generating an answer..."):
+            try:
+                retrieved_chunks = retrieve_relevant_chunks(
+                    collection=st.session_state.collection,
+                    question=question,
+                )
+
+
+                answer = answer_from_context_with_history(
+                    question=question,
+                    retrieved_chunks=retrieved_chunks,
+                    chat_history=st.session_state.chat_history,
+             )
+
+
+                source_pages = sorted(
+                    list({
+                        chunk["page_number"]
+                        for chunk in retrieved_chunks
+                        if chunk["page_number"] is not None
+                    })
+                )
+
+
+                if source_pages:
+                    answer_with_sources = (
+                        f"{answer}\n\n"
+                        f"**Source pages:** {', '.join(map(str, source_pages))}"
+                    )
+                else:
+                    answer_with_sources = answer
+
+
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": answer_with_sources,
+                    "sources": retrieved_chunks,
+                })
+
+
+            except Exception as error:
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": f"Sorry, I could not generate an answer: {error}",
+                    "sources": [],
+                })
+
+
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+
+            if message["role"] == "assistant" and message.get("sources"):
+                with st.expander("View retrieved sources"):
+                    for index, source in enumerate(
+                        message["sources"],
+                        start=1,
+                    ):
+                        page_number = source.get("page_number", "Unknown")
+                        text = source.get("text", "")
+
+
+                        st.markdown(
+                            f"**Source {index} — Page {page_number}**"
+                        )
+                        st.text(text[:400])
+
+
+                        if index < len(message["sources"]):
+                            st.divider()
